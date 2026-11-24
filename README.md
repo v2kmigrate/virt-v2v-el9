@@ -11,7 +11,7 @@ Proxmox, and shared here for anyone who runs virt-v2v on EL9.
 
 | | |
 |---|---|
-| Current version | `virt-v2v-2.7.1-19.el9_7.v2k3` |
+| Current version | `virt-v2v-2.7.1-19.el9_7.v2k4` |
 | Based on | AlmaLinux `virt-v2v-2.7.1-19.el9_7` |
 | Download | [Releases](../../releases) (signed RPMs, source RPM, checksums, public key) |
 
@@ -21,6 +21,9 @@ The stock EL9 virt-v2v (2.7.1) has bugs that upstream has fixed since. Without t
 
 - a migrated **Windows Server 2025** guest can reboot forever on its first boot, because one virtio driver that always
   fails to install blocks every later step (guest agent, network setup, VMware Tools removal);
+- on 64-bit Windows, the first boot does not notice that Windows is **still waiting for a restart after updates**, so
+  drivers can be installed while Windows is still busy, and a driver that fails then is not retried (for example, no
+  network without `netkvm`);
 - migrated **Debian 11, 12 and 13** guests with UEFI boot can fail to boot;
 - there is no way to switch off the **fstrim** step, which can take a long time on large disks or slow storage.
 
@@ -35,6 +38,7 @@ The stock EL9 virt-v2v (2.7.1) has bugs that upstream has fixed since. Without t
 | [libguestfs/virt-v2v#207](https://github.com/libguestfs/virt-v2v/pull/207) (issue [#206](https://github.com/libguestfs/virt-v2v/issues/206)) | Debian UEFI first-boot script: keeps the `\EFI\BOOT` fallback loader unless `efibootmgr` succeeded, works without `sudo`, and finds the EFI partition itself, so the guest still boots after its first boot. Needed together with the three Debian rules above. This package carries an equivalent version of the fix, written before #207 was merged. | Yes |
 | [libguestfs/virt-v2v#202](https://github.com/libguestfs/virt-v2v/pull/202) (issue [#178](https://github.com/libguestfs/virt-v2v/issues/178)) | Windows first boot: the virtio driver install no longer stops on one failing driver. It installs every driver, lists the ones that failed, and the first boot carries on. This stops the endless reboot loop seen with Windows Server 2025 and `smbus.inf`. | Yes |
 | [libguestfs/libguestfs-common#54](https://github.com/libguestfs/libguestfs-common/pull/54) | Windows first boot: a step that keeps asking for a retry is tried at most 3 times, then skipped, so later steps still run. | Yes |
+| [libguestfs/virt-v2v#211](https://github.com/libguestfs/virt-v2v/pull/211) (issue [#210](https://github.com/libguestfs/virt-v2v/issues/210)) | Windows first boot: the check for a pending restart (Windows Update, component servicing) reads the 64-bit registry, so on 64-bit Windows the drivers are installed only after that restart. New in `.v2k4`. | Yes |
 
 The fixes are rebased onto the EL9 `rhel-9.8` branch of virt-v2v. Some needed small rewrites to fit the older code;
 the behaviour matches upstream. Each patch's commit message names its upstream commit and pull request, and
@@ -48,9 +52,9 @@ release you want from [Releases](../../releases), then:
 ```
 sudo rpm --import RPM-GPG-KEY-v2kmigrate
 sha256sum -c SHA256SUMS --ignore-missing
-rpm -K virt-v2v-2.7.1-19.el9_7.v2k3.x86_64.rpm      # "digests signatures OK"
-sudo dnf install ./virt-v2v-2.7.1-19.el9_7.v2k3.x86_64.rpm
-rpm -q virt-v2v                                     # virt-v2v-2.7.1-19.el9_7.v2k3.x86_64
+rpm -K virt-v2v-2.7.1-19.el9_7.v2k4.x86_64.rpm      # "digests signatures OK"
+sudo dnf install ./virt-v2v-2.7.1-19.el9_7.v2k4.x86_64.rpm
+rpm -q virt-v2v                                     # virt-v2v-2.7.1-19.el9_7.v2k4.x86_64
 virt-v2v --help | grep no-fstrim
 ```
 
@@ -71,12 +75,12 @@ To check the checksum file itself: `gpg --import RPM-GPG-KEY-v2kmigrate`, then `
 ## Source
 
 The source RPM is in every release. It is AlmaLinux's source package with the patches in this repository added
-(`virt-v2v.spec`, `patches/`). To rebuild: `dnf builddep virt-v2v-2.7.1-19.el9_7.v2k3.src.rpm`, then
-`rpmbuild --rebuild virt-v2v-2.7.1-19.el9_7.v2k3.src.rpm`.
+(`virt-v2v.spec`, `patches/`). To rebuild: `dnf builddep virt-v2v-2.7.1-19.el9_7.v2k4.src.rpm`, then
+`rpmbuild --rebuild virt-v2v-2.7.1-19.el9_7.v2k4.src.rpm`.
 
 ## Versions
 
-Every version is a git tag (the package version, for example `v2.7.1-19.el9_7.v2k3`) and a GitHub Release. Older
+Every version is a git tag (the package version, for example `v2.7.1-19.el9_7.v2k4`) and a GitHub Release. Older
 releases stay downloadable. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Not covered / known limits
@@ -84,11 +88,8 @@ releases stay downloadable. See [CHANGELOG.md](CHANGELOG.md).
 - Community builds of upstream virt-v2v code. Not affiliated with, or supported by, Red Hat or AlmaLinux. No warranty
   (see the licence).
 - Built and tested for x86_64 on AlmaLinux 9 only.
-- Not in this version: [libguestfs/virt-v2v#211](https://github.com/libguestfs/virt-v2v/pull/211) (issue
-  [#210](https://github.com/libguestfs/virt-v2v/issues/210)). Before installing drivers, the Windows first boot is
-  meant to wait if Windows still has a restart pending after updates. On 64-bit Windows it reads the wrong part of the
-  registry, so it does not notice. The stock package has the same problem. Tip: restart Windows VMs after patching,
-  before migrating them.
+- If a Windows restart stays pending through 3 boots (it never clears), the driver step gives up so that the first
+  boot can finish, and the drivers are not installed. Tip: restart Windows VMs after patching, before migrating them.
 - The Windows guest agent comes from the `virtio-win` package, not from virt-v2v. With `virtio-win` 1.9.61 (qemu-ga
   110.2.3), the agent install fails on a guest that still has a leftover "QEMU Guest Agent VSS Provider" service from
   an earlier agent. Upstream fixed this in qemu-ga 110.2.4 (QEMU commit `55dc0aecb86b`). Workaround: if the source VM

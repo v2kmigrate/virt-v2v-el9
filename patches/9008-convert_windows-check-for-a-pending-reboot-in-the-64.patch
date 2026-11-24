@@ -1,0 +1,83 @@
+From ced405d6c37c15bec5db8b79a3cbc9cff0e45270 Mon Sep 17 00:00:00 2001
+From: Andrija Panic <andrija.panic@gmail.com>
+Date: Tue, 24 Nov 2026 18:40:49 +0100
+Subject: [PATCH] convert_windows: check for a pending reboot in the 64-bit
+ registry
+
+Before installing the virtio drivers, the "pnputil install drivers"
+firstboot script checks whether Windows is waiting for a restart to
+finish installing updates, and if so retries after the next reboot
+(exit 249).  It looks in three places: the Windows Update
+RebootRequired key, the CBS (component servicing) RebootPending key and
+the Session Manager PendingFileRenameOperations value.
+
+The script runs under the firstboot service, which is the 32-bit
+rhsrvany.exe; that is also why it calls %systemroot%\Sysnative\PnPutil.
+Its reg.exe is therefore 32-bit too, and on 64-bit Windows a 32-bit
+"reg query HKLM\SOFTWARE\..." is redirected to WOW6432Node.  The
+Windows Update and CBS checks never see the real keys, and only the
+PendingFileRenameOperations check (HKLM\SYSTEM is not redirected)
+works.  A guest converted with updates still pending, for example a
+server patched but not yet restarted, then runs pnputil while Windows
+is still servicing, and since commit fe53f740 a driver that fails
+there is reported instead of retried.
+
+Use the 64-bit reg.exe through Sysnative when it exists, as the script
+already does for PnPutil, and plain reg otherwise (32-bit Windows, where
+there is no redirection).  All three queries use it, so the checks read
+the same registry that Windows Update and CBS write.
+
+With the checks working, a reboot that stays pending makes the script
+exit 249 on every boot; libguestfs-common commit a5afb049 bounds that
+to 3 attempts.
+
+Fixes: https://github.com/libguestfs/virt-v2v/issues/210
+
+Backport of upstream commit 6d6417ea310177611d4a0d7deac6511e1970dd37,
+pull request https://github.com/libguestfs/virt-v2v/pull/211.  Applied
+by hand: rhel-9.8 carries the script in the older "...\n\" string form,
+so the upstream diff does not apply as is.  The generated script is the
+same as upstream's.
+
+Signed-off-by: Andrija Panic <andrija.panic@gmail.com>
+---
+ convert/convert_windows.ml | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/convert/convert_windows.ml b/convert/convert_windows.ml
+index 6c8a6688..35693e49 100644
+--- a/convert/convert_windows.ml
++++ b/convert/convert_windows.ml
+@@ -401,19 +401,26 @@ let convert (g : G.guestfs) source inspect i_firmware
+                      echo Installing drivers from %inf_dir%\n\
+                      set REBOOT_PENDING=0\n\
+                      \n\
+-                     reg query \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired\"\n\
++                     rem The first-boot service that runs this script is a 32-bit program, so\n\
++                     rem on 64-bit Windows a plain \"reg query HKLM\\SOFTWARE\\...\" would read\n\
++                     rem WOW6432Node and never see the keys below.  Use the 64-bit reg.exe\n\
++                     rem when there is one, as for PnPutil.\n\
++                     set REG=reg\n\
++                     if exist %systemroot%\\Sysnative\\reg.exe set REG=%systemroot%\\Sysnative\\reg.exe\n\
++                     \n\
++                     %REG% query \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired\"\n\
+                      if %errorlevel%==0 (\n\
+                      echo Windows Update: Reboot required.\n\
+                      set REBOOT_PENDING=1\n\
+                      )\n\
+                      \n\
+-                     reg query \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending\"\n\
++                     %REG% query \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending\"\n\
+                      if %errorlevel%==0 (\n\
+                      echo CBS: Reboot required.\n\
+                      set REBOOT_PENDING=1\n\
+                      )\n\
+                      \n\
+-                     reg query \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\" /v PendingFileRenameOperations\n\
++                     %REG% query \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\" /v PendingFileRenameOperations\n\
+                      if %errorlevel%==0 (\n\
+                      echo Session Manager: Reboot required.\n\
+                      set REBOOT_PENDING=1\n\
+-- 
+2.43.0
+

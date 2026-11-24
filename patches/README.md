@@ -13,3 +13,4 @@ upstream commit and pull request.
 | `9005-convert-convert_linux.ml-Keep-the-UEFI-fallback-unle.patch` | equivalent of [libguestfs/virt-v2v#207](https://github.com/libguestfs/virt-v2v/pull/207), written before it was merged |
 | `9006-convert_windows-do-not-abort-the-pnputil-firstboot-s.patch` | [libguestfs/virt-v2v#202](https://github.com/libguestfs/virt-v2v/pull/202), rewritten for the rhel-9.8 script |
 | `9007-mlcustomize-firstboot-bound-the-retries-of-a-Windows.patch` | [libguestfs/libguestfs-common#54](https://github.com/libguestfs/libguestfs-common/pull/54), rewritten for the rhel-9.8 common submodule |
+| `9008-convert_windows-check-for-a-pending-reboot-in-the-64.patch` | [libguestfs/virt-v2v#211](https://github.com/libguestfs/virt-v2v/pull/211), applied by hand to the rhel-9.8 script (from v2k4) |

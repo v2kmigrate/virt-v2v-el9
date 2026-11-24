@@ -8,7 +8,7 @@
 Name:          virt-v2v
 Epoch:         1
 Version:       2.7.1
-Release:       19%{?dist}.v2k3
+Release:       19%{?dist}.v2k4
 Summary:       Convert a virtual machine to run on KVM
 
 License:       GPL-2.0-or-later AND LGPL-2.0-or-later
@@ -103,6 +103,9 @@ Patch9005:     9005-convert-convert_linux.ml-Keep-the-UEFI-fallback-unle.patch
 # for the rhel-9.8 Windows first-boot code (see %%changelog).
 Patch9006:     9006-convert_windows-do-not-abort-the-pnputil-firstboot-s.patch
 Patch9007:     9007-mlcustomize-firstboot-bound-the-retries-of-a-Windows.patch
+# V2K backport from upstream virt-v2v, applied by hand to the rhel-9.8
+# script text (see %%changelog).
+Patch9008:     9008-convert_windows-check-for-a-pending-reboot-in-the-64.patch
 
 %if !0%{?rhel}
 # libguestfs hasn't been built on i686 for a while since there is no
@@ -406,6 +409,12 @@ make -C tests TESTS=test-fedora-luks-on-lvm-conversion.sh check
 
 
 %changelog
+* Tue Nov 24 2026 Andrija Panic <andrija.panic@gmail.com> - 1:2.7.1-19.v2k4
+- Windows: the pnputil first-boot script checks for a pending reboot
+  with the 64-bit reg.exe (through Sysnative), so the Windows Update and
+  CBS flags are seen on 64-bit Windows (upstream commit 6d6417ea,
+  PR #211, issue #210; applied by hand to the rhel-9.8 script)
+
 * Thu Oct 29 2026 Andrija Panic <andrija.panic@gmail.com> - 1:2.7.1-19.v2k3
 - Windows: the pnputil first-boot script installs every driver, reports
   the ones that failed and exits 0, instead of retrying forever on one

@@ -2,6 +2,14 @@
 
 Newest first. Each version is a git tag and a GitHub Release with signed packages.
 
+## v2.7.1-19.el9_7.v2k4 (2026-11-24)
+
+v2k3 plus one upstream fix:
+
+- Windows first boot: the check for a pending restart (Windows Update, component servicing) reads the 64-bit
+  registry, so on 64-bit Windows the drivers are installed only after that restart (upstream virt-v2v #211,
+  issue #210).
+
 ## v2.7.1-19.el9_7.v2k3 (2026-10-29)
 
 Based on AlmaLinux `virt-v2v-2.7.1-19.el9_7`.
