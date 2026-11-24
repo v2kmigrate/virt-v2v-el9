@@ -1,0 +1,80 @@
+From 92debdde7453c4d49fe9939f3e1f25b8e204c90f Mon Sep 17 00:00:00 2001
+From: Andrija Panic <andrija.panic@gmail.com>
+Date: Thu, 29 Oct 2026 12:58:26 +0100
+Subject: [PATCH] convert_windows: do not abort the pnputil firstboot script on
+ one failing driver
+
+The "pnputil install drivers" firstboot script exited 249 (retry on
+next boot) as soon as one .inf failed to install, and the firstboot
+wrapper retries 249 without limit.  A driver that fails
+deterministically therefore rebooted the guest forever and blocked
+every later firstboot script (QEMU guest agent, network configuration).
+Seen on Windows Server 2025 with smbus.inf from virtio-win 0.1.285:
+"A certificate chain processed, but terminated in a root certificate
+which is not trusted by the trust provider."
+https://github.com/libguestfs/virt-v2v/issues/178
+
+Install every driver, remember the ones that failed, report them at the
+end and exit 0.  By the time this script runs the guest has already
+booted from its virtio disk, so no driver installed here can be a
+prerequisite for booting; a missing optional device driver is a
+degraded guest, an endless reboot loop is an unusable one.  The
+pending-reboot check keeps its 249.
+
+Signed-off-by: Andrija Panic <andrija.panic@gmail.com>
+
+Backport to virt-v2v 2.7.1 (rhel-9.8) of upstream commit
+fe53f740c189af69137b008694bf2b0a239ef273, pull request
+https://github.com/libguestfs/virt-v2v/pull/202, released in
+virt-v2v 2.13.8.  Rewritten by hand: rhel-9.8 carries the same script
+(Red Hat's backports of 594b05d6, 523aff28 and 07192e2b) in the older
+"...\n\" string form, so the upstream change does not apply as is.
+The script logic is the same as upstream's.
+
+One line added downstream: when a reboot is pending, the script also
+says "No drivers were installed by pnputil on this attempt.", so that
+the first-boot log states plainly that pnputil installed nothing if the
+first-boot service gives up after 3 attempts (patch 9007).
+---
+ convert/convert_windows.ml | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/convert/convert_windows.ml b/convert/convert_windows.ml
+index b80128a7..6c8a6688 100644
+--- a/convert/convert_windows.ml
++++ b/convert/convert_windows.ml
+@@ -421,21 +421,29 @@ let convert (g : G.guestfs) source inspect i_firmware
+                      \n\
+                      if \"%REBOOT_PENDING%\"==\"1\" (\n\
+                      echo A reboot is pending.\n\
++                     echo No drivers were installed by pnputil on this attempt.\n\
+                      exit /b 249\n\
+                      ) else (\n\
+                      echo No pending reboot detected.\n\
+                      )\n\
+                      \n\
++                     set FAILED=\n\
+                      for %%f in (\"%inf_dir%*.inf\") do (\n\
+                      echo Installing: %%~nxf.\n\
+                      %systemroot%\\Sysnative\\PnPutil -i -a \"%%f\"\n\
+                      if !errorlevel! neq 0 if !errorlevel! neq 259 (\n\
+-                     echo Failed to install %%~nxf.\n\
+-                     exit /b 249\n\
++                     echo Failed to install %%~nxf ^(pnputil exit code !errorlevel!^).\n\
++                     set FAILED=!FAILED! %%~nxf\n\
+                      ) else (\n\
+                      echo Successfully installed %%~nxf.\n\
+                      )\n\
+                      )\n\
++                     if defined FAILED (\n\
++                     echo The following drivers could not be installed:!FAILED!\n\
++                     echo The guest has already booted from its virtio disk, so a driver that\n\
++                     echo fails deterministically must not block the remaining firstboot scripts.\n\
++                     exit /b 0\n\
++                     )\n\
+                      echo All drivers installed successfully.\n\
+                      exit /b 0\n\
+                      )" in
+-- 
+2.43.0
+

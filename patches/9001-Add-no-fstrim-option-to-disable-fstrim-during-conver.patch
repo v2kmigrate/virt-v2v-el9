@@ -1,0 +1,318 @@
+From 466dac55deef2f02d2e1b28918e5e9c91e12eb8f Mon Sep 17 00:00:00 2001
+From: Andrija Panic <andrija.panic@gmail.com>
+Date: Wed, 28 Oct 2026 00:52:25 +0100
+Subject: [PATCH] Add --no-fstrim option to disable fstrim during conversion
+
+In particular, fstrim on NTFS is a serialized operation which can be
+very slow on large partitions.
+
+Closes: https://github.com/libguestfs/virt-v2v/pull/121
+Fixes: https://redhat.atlassian.net/browse/RHEL-164271
+
+RWMJ: Added documentation, a test, and larger commit message.
+
+Backport to virt-v2v 2.7.1 (rhel-9.8) of upstream commit
+251639458907f06148ecdd5acbac5c43136e7662 by sarika
+<sarika@platform9.com>, released in virt-v2v 2.11.5 and 2.12.0.
+
+Conflicts resolved: 2.7.1 has no --memsize or --smp option, so only
+the --no-fstrim lines were taken in v2v/v2v.ml, in-place/in_place.ml
+and inspector/inspector.ml; in docs/virt-v2v.pod the "Trimming"
+section is a =head3 under a different heading, and the
+"Use --no-fstrim" sentence was added at its end.  The option name,
+help text and log messages are unchanged from upstream.
+
+(cherry picked from commit 251639458907f06148ecdd5acbac5c43136e7662)
+---
+ convert/convert.ml          | 10 +++++++--
+ convert/convert.mli         |  1 +
+ docs/virt-v2v-in-place.pod  |  4 ++++
+ docs/virt-v2v-inspector.pod |  2 ++
+ docs/virt-v2v.pod           |  6 +++++
+ in-place/in_place.ml        |  5 +++++
+ inspector/inspector.ml      |  6 +++++
+ tests/Makefile.am           |  2 ++
+ tests/test-no-fstrim.sh     | 44 +++++++++++++++++++++++++++++++++++++
+ v2v/v2v.ml                  |  7 ++++++
+ 10 files changed, 85 insertions(+), 2 deletions(-)
+ create mode 100755 tests/test-no-fstrim.sh
+
+diff --git a/convert/convert.ml b/convert/convert.ml
+index d4d28f68..50cb0e00 100644
+--- a/convert/convert.ml
++++ b/convert/convert.ml
+@@ -38,6 +38,7 @@ type options = {
+   root_choice : root_choice;
+   static_ips : static_ip list;
+   customize_ops : Customize_cmdline.ops;
++  no_fstrim : bool;
+ }
+ 
+ (* Mountpoint stats, used for free space estimation. *)
+@@ -102,8 +103,13 @@ let rec convert dir options source =
+    * because unused blocks are marked in the overlay and thus do
+    * not have to be copied.
+    *)
+-  message (f_"Mapping filesystem data to avoid copying unused and blank areas");
+-  do_fstrim g inspect;
++  if not options.no_fstrim then (
++    message
++      (f_"Mapping filesystem data to avoid copying unused and blank areas");
++    do_fstrim g inspect
++  ) else (
++    message (f_"Skipping fstrim (--no-fstrim specified)")
++  );
+ 
+   message (f_"Closing the overlay");
+   g#umount_all ();
+diff --git a/convert/convert.mli b/convert/convert.mli
+index 04e1718c..6f264ede 100644
+--- a/convert/convert.mli
++++ b/convert/convert.mli
+@@ -24,6 +24,7 @@ type options = {
+   root_choice : Types.root_choice; (** [--root] option *)
+   static_ips : Types.static_ip list; (** [--mac :ip:] option *)
+   customize_ops : Customize_cmdline.ops; (** virt-customize options *)
++  no_fstrim : bool;                (** [--no-fstrim] option *)
+ }
+ 
+ val convert : string -> options -> Types.source -> Types.inspect * Types.target_meta
+diff --git a/docs/virt-v2v-in-place.pod b/docs/virt-v2v-in-place.pod
+index 34e99cf0..83cf1395 100644
+--- a/docs/virt-v2v-in-place.pod
++++ b/docs/virt-v2v-in-place.pod
+@@ -215,6 +215,10 @@ are mapped to C<out>.
+ 
+ See L<virt-v2v(1)/Networks and bridges>.
+ 
++=item B<--no-fstrim>
++
++Do not trim the filesystem.  See L<virt-v2v(1)/Trimming>.
++
+ =item B<-O> output.xml
+ 
+ =item B<-O ->
+diff --git a/docs/virt-v2v-inspector.pod b/docs/virt-v2v-inspector.pod
+index 8201fcf9..ddabdc24 100644
+--- a/docs/virt-v2v-inspector.pod
++++ b/docs/virt-v2v-inspector.pod
+@@ -198,6 +198,8 @@ virt-v2v-inspector.
+ 
+ =item B<--network> ...
+ 
++=item B<--no-fstrim>
++
+ =item B<-q>
+ 
+ =item B<--quiet>
+diff --git a/docs/virt-v2v.pod b/docs/virt-v2v.pod
+index 4495e53d..b4cc1c4a 100644
+--- a/docs/virt-v2v.pod
++++ b/docs/virt-v2v.pod
+@@ -423,6 +423,10 @@ are mapped to C<out>.
+ 
+ See L</Networks and bridges> below.
+ 
++=item B<--no-fstrim>
++
++Do not trim the filesystem.  See L</Trimming> below.
++
+ =item B<-o> B<disk>
+ 
+ This is the same as I<-o local>.
+@@ -1244,6 +1248,8 @@ fstrim support in the Linux kernel is improving gradually, so over
+ time some of these restrictions will be lifted and virt-v2v will work
+ faster.
+ 
++Use I<--no-fstrim> to disable trimming.
++
+ =head2 Post-conversion tasks
+ 
+ =head3 Guest network configuration
+diff --git a/in-place/in_place.ml b/in-place/in_place.ml
+index c77533e7..a79feecf 100644
+--- a/in-place/in_place.ml
++++ b/in-place/in_place.ml
+@@ -152,6 +152,7 @@ let rec main () =
+   in
+ 
+   (* Other options that we handle here. *)
++  let no_fstrim = ref false in
+   let print_source = ref false in
+ 
+   let input_mode = ref `Not_set in
+@@ -187,6 +188,8 @@ let rec main () =
+                                     s_"Map network ‘in’ to ‘out’";
+     [ S 'O' ],       Getopt.String ("output.xml", set_output_xml_option),
+                                     s_"Set the output filename";
++    [ L"no-fstrim" ],  Getopt.Set no_fstrim,
++                                    s_"Don't trim filesystems before conversion";
+     [ L"print-source" ], Getopt.Set print_source,
+                                     s_"Print source and stop";
+     [ L"root" ],     Getopt.String ("ask|... ", set_root_choice),
+@@ -243,6 +246,7 @@ read the man page virt-v2v-in-place(1).
+   let customize_ops = get_customize_ops () in
+   let input_conn = !input_conn in
+   let input_mode = !input_mode in
++  let no_fstrim = !no_fstrim in
+   let output_xml = !output_xml in
+   let print_source = !print_source in
+   let root_choice = !root_choice in
+@@ -334,6 +338,7 @@ read the man page virt-v2v-in-place(1).
+     root_choice;
+     static_ips;
+     customize_ops;
++    no_fstrim;
+   } in
+ 
+   (* Before starting the input module, check there is sufficient
+diff --git a/inspector/inspector.ml b/inspector/inspector.ml
+index 16300d45..14ef0f0d 100644
+--- a/inspector/inspector.ml
++++ b/inspector/inspector.ml
+@@ -65,6 +65,8 @@ let rec main () =
+     )
+   in
+ 
++  let no_fstrim = ref false in
++
+   let network_map = Networks.create () in
+   let static_ips = ref [] in
+   let rec add_network str =
+@@ -174,6 +176,8 @@ let rec main () =
+                                     s_"Input transport";
+     [ L"mac" ],      Getopt.String ("mac:network|bridge|ip:out", add_mac),
+                                     s_"Map NIC to network or bridge or assign static IP";
++    [ L"no-fstrim" ],  Getopt.Set no_fstrim,
++                                    s_"Don't trim filesystems before conversion";
+     [ S 'n'; L"network" ], Getopt.String ("in:out", add_network),
+                                     s_"Map network ‘in’ to ‘out’";
+     [ S 'O' ],       Getopt.String ("output.xml", set_output_file_option),
+@@ -233,6 +237,7 @@ read the man page virt-v2v-inspector(1).
+     | Some "vddk" -> Some `VDDK
+     | Some transport ->
+        error (f_"unknown input transport ‘-it %s’") transport in
++  let no_fstrim = !no_fstrim in
+   let root_choice = !root_choice in
+   let static_ips = !static_ips in
+ 
+@@ -338,6 +343,7 @@ read the man page virt-v2v-inspector(1).
+     root_choice;
+     static_ips;
+     customize_ops;
++    no_fstrim;
+   } in
+ 
+   (* Before starting the input module, check there is sufficient
+diff --git a/tests/Makefile.am b/tests/Makefile.am
+index 97393d02..63ea1c4e 100644
+--- a/tests/Makefile.am
++++ b/tests/Makefile.am
+@@ -88,6 +88,7 @@ TESTS = \
+ 	test-mac.sh \
+ 	test-machine-readable.sh \
+ 	test-networks-and-bridges.sh \
++	test-no-fstrim.sh \
+ 	test-o-glance.sh \
+ 	test-o-kubevirt-fedora.sh \
+ 	test-o-kubevirt-windows.sh \
+@@ -256,6 +257,7 @@ EXTRA_DIST += \
+ 	test-machine-readable.sh \
+ 	test-networks-and-bridges-expected.xml \
+ 	test-networks-and-bridges.sh \
++	test-no-fstrim.sh \
+ 	test-o-glance.sh \
+ 	test-o-kubevirt-fedora.sh \
+ 	test-o-kubevirt-fedora.yaml.expected \
+diff --git a/tests/test-no-fstrim.sh b/tests/test-no-fstrim.sh
+new file mode 100755
+index 00000000..ba84ad96
+--- /dev/null
++++ b/tests/test-no-fstrim.sh
+@@ -0,0 +1,44 @@
++#!/bin/bash -
++# libguestfs virt-v2v test script
++# Copyright (C) 2014-2026 Red Hat Inc.
++#
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program; if not, write to the Free Software
++# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++
++# Test --no-fstrim option.
++
++source ./functions.sh
++set -e
++set -x
++
++skip_if_skipped
++requires test -s ../test-data/phony-guests/windows.img
++
++export VIRT_TOOLS_DATA_DIR="$srcdir/../test-data/fake-virt-tools"
++
++d=test-no-fstrim.d
++rm -rf $d
++cleanup_fn rm -rf $d
++mkdir $d
++
++$VG virt-v2v --debug-gc \
++    -i disk ../test-data/phony-guests/windows.img \
++    --no-fstrim \
++    -o local -os $d
++
++# Test the libvirt XML metadata and a disk was created.
++test -f $d/windows.xml
++test -f $d/windows-sda
++
++cat $d/windows.xml
+diff --git a/v2v/v2v.ml b/v2v/v2v.ml
+index 7f1d4352..c1ab2db0 100644
+--- a/v2v/v2v.ml
++++ b/v2v/v2v.ml
+@@ -74,6 +74,9 @@ let rec main () =
+   in
+ 
+   let parallel = ref 1 in
++
++  let no_fstrim = ref false in
++
+   let network_map = Networks.create () in
+   let static_ips = ref [] in
+   let rec add_network str =
+@@ -244,6 +247,8 @@ let rec main () =
+                                     s_"Use password from file to connect to output hypervisor";
+     [ M"os" ],       Getopt.String ("storage", set_string_option_once "-os" output_storage),
+                                     s_"Set output storage location";
++    [ L"no-fstrim" ],  Getopt.Set no_fstrim,
++                                    s_"Don't trim filesystems before conversion";
+     [ L"parallel" ], Getopt.Set_int ("N", parallel),
+       s_"Run up to N instances of nbdcopy in parallel";
+     [ L"print-source" ], Getopt.Set print_source,
+@@ -312,6 +317,7 @@ read the man page virt-v2v(1).
+     | Some "vddk" -> Some `VDDK
+     | Some transport ->
+        error (f_"unknown input transport ‘-it %s’") transport in
++  let no_fstrim = !no_fstrim in
+   let output_alloc =
+     match !output_alloc with
+     | `Not_set | `Sparse -> Types.Sparse
+@@ -486,6 +492,7 @@ read the man page virt-v2v(1).
+     root_choice;
+     static_ips;
+     customize_ops;
++    no_fstrim;
+   } in
+ 
+   (* Before starting the input module, check there is sufficient
+-- 
+2.43.0
+

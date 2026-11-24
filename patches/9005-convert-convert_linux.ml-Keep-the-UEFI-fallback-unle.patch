@@ -1,0 +1,87 @@
+From fd4208a97a5ee689aae89edd30e7502852a10dc9 Mon Sep 17 00:00:00 2001
+From: Andrija Panic <andrija.panic@gmail.com>
+Date: Wed, 28 Oct 2026 03:43:36 +0100
+Subject: [PATCH] convert/convert_linux.ml: Keep the UEFI fallback unless
+ efibootmgr succeeds
+
+For Ubuntu 14 and Debian 11-13 guests without a UEFI fallback loader,
+the conversion copies shim to /boot/efi/EFI/BOOT/ and adds a first-boot
+script that recreates the NVRAM boot entry and then removes the
+fallback:
+
+  sudo efibootmgr -c -L debian -l \\EFI\\debian\\shimx64.efi
+  rm -rf /boot/efi/EFI/BOOT/
+
+The rm runs whatever efibootmgr did, and efibootmgr fails in common
+cases, so the guest boots once after conversion and never again (OVMF
+drops to the UEFI shell):
+
+ - efibootmgr is only a Recommends of grub-efi-amd64-bin on Debian, so
+   cloud images and --no-install-recommends installs lack it
+   ("sudo: efibootmgr: command not found");
+ - sudo is not installed on Debian guests installed with a root
+   password ("sudo: command not found"); first-boot scripts run as root
+   anyway;
+ - without -d/-p efibootmgr writes an entry for /dev/sda partition 1,
+   which is wrong on virtio-blk (/dev/vda) and whenever the ESP is not
+   partition 1 (Debian cloud images use partition 15).
+
+Run efibootmgr without sudo, pass the disk and partition of the mounted
+ESP, and remove the fallback only if efibootmgr succeeded.  If it is
+missing or fails, the script says so in the first-boot log, the
+fallback stays and the guest keeps booting through it.
+
+Downstream patch for the V2K build of virt-v2v 2.7.1; not upstream.
+---
+ convert/convert_linux.ml | 32 +++++++++++++++++++++++++++++---
+ 1 file changed, 29 insertions(+), 3 deletions(-)
+
+diff --git a/convert/convert_linux.ml b/convert/convert_linux.ml
+index e5833563..012984d8 100644
+--- a/convert/convert_linux.ml
++++ b/convert/convert_linux.ml
+@@ -1416,12 +1416,38 @@ let convert (g : G.guestfs) source inspect i_firmware _ keep_serial_console _ =
+                  * at UEFI fallback path for simplicity
+                  *)
+                 if String.find shim (sprintf "/boot/efi/EFI/%s/shim" distro) >= 0 then
++                  (* The script runs as root, and the guest may have no
++                   * sudo.  efibootmgr is only recommended by grub on
++                   * Debian, and without -d/-p it uses /dev/sda partition 1,
++                   * so the disk and partition are taken from the mounted
++                   * ESP (the test -d triggers an automount).  The temp
++                   * loader is removed only once the boot entry exists,
++                   * otherwise the guest would not boot again.
++                   *)
+                   let fix_script =
+                     sprintf
+                       "#!/bin/bash\n\
+-                       sudo efibootmgr -c -L %s \
+-                         -l \\\\EFI\\\\%s\\\\shim%s.efi\n\
+-                       rm -rf %s"
++                       keep='keeping the removable-media loader %s'\n\
++                       if ! command -v efibootmgr >/dev/null; then\n\
++                       echo \"efibootmgr not available, $keep\"\n\
++                       exit 0\n\
++                       fi\n\
++                       test -d /boot/efi/EFI\n\
++                       esp=$(awk '$2 == \"/boot/efi\" { dev = $1 } END { print dev }' /proc/mounts)\n\
++                       name=$(basename \"$(readlink -f \"$esp\")\")\n\
++                       if ! test -f \"/sys/class/block/$name/partition\"; then\n\
++                       echo \"ESP partition not found, $keep\"\n\
++                       exit 0\n\
++                       fi\n\
++                       disk=/dev/$(basename \"$(readlink -f \"/sys/class/block/$name/..\")\")\n\
++                       part=$(cat \"/sys/class/block/$name/partition\")\n\
++                       if efibootmgr -c -d \"$disk\" -p \"$part\" -L %s \
++                         -l \\\\EFI\\\\%s\\\\shim%s.efi; then\n\
++                       rm -rf %s\n\
++                       else\n\
++                       echo \"efibootmgr failed, $keep\"\n\
++                       fi"
++                      uefi_fallback_path
+                       distro distro arch_suffix uefi_fallback_path in
+                   Firstboot.add_firstboot_script
+                     g inspect.i_root "fix uefi boot" fix_script
+-- 
+2.43.0
+

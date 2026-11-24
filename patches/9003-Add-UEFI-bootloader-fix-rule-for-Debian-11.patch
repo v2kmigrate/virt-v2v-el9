@@ -1,0 +1,38 @@
+From be05a35d94d185e3caa125b544a9b9bcafba256e Mon Sep 17 00:00:00 2001
+From: Andrija Panic <andrija.panic@gmail.com>
+Date: Wed, 28 Oct 2026 01:08:38 +0100
+Subject: [PATCH] Add UEFI bootloader fix rule for Debian 11
+
+Debian 11 uses the same shim-based EFI layout as Debian 12 but was
+missing from the UEFI fix pattern match, causing converted UEFI VMs
+to fail to boot with "No UEFI fix rule for debian 11".
+
+Resolves: https://redhat.atlassian.net/browse/RHEL-167109
+
+Backport to virt-v2v 2.7.1 (rhel-9.8) of upstream commit
+01288ce7914e6daf6c521b16bfafae799186e0e4 by Surya Gupta
+<surygupt@redhat.com>, pull request
+https://github.com/libguestfs/virt-v2v/pull/195, released in
+virt-v2v 2.13.7.  Applied without conflicts.
+
+(cherry picked from commit 01288ce7914e6daf6c521b16bfafae799186e0e4)
+---
+ convert/convert_linux.ml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/convert/convert_linux.ml b/convert/convert_linux.ml
+index e295a01d..31d249b8 100644
+--- a/convert/convert_linux.ml
++++ b/convert/convert_linux.ml
+@@ -1390,7 +1390,7 @@ let convert (g : G.guestfs) source inspect i_firmware _ keep_serial_console _ =
+                   g inspect.i_root "fix uefi boot" fix_script)
+               else
+                 cant_fix_uefi ()
+-            | ("ubuntu", 14) | ("debian", 12)->
++            | ("ubuntu", 14) | ("debian", 11) | ("debian", 12) ->
+               (* to make a bootable uefi ubuntu 14 we need to
+                * copy shim<arch>.efi to UEFI fallback path
+                * and rename it to BOOT<arch>.efi, also we copy
+-- 
+2.43.0
+

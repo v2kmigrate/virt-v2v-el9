@@ -1,0 +1,73 @@
+From 4ab34ca0c42c521bba93dff440d24a4b7c705b39 Mon Sep 17 00:00:00 2001
+From: Andrija Panic <andrija.panic@gmail.com>
+Date: Thu, 29 Oct 2026 12:58:30 +0100
+Subject: [PATCH] mlcustomize/firstboot: bound the retries of a Windows script
+ that exits 249
+
+A Windows firstboot script exits 249 to ask for another attempt on the
+next boot.  The wrapper retried without limit, so a script that fails
+the same way every time rebooted the guest forever and no later script
+ever ran.  Seen with virt-v2v's "pnputil install drivers" script on
+Windows Server 2025 when one optional driver (smbus.inf from
+virtio-win 0.1.285) is rejected by signature validation:
+https://github.com/libguestfs/virt-v2v/issues/178
+
+Count the attempts in a sidecar file next to the script (<script>.tries)
+and move the script to scripts-done after the third 249, logging that
+we gave up; remove the counter when the script finishes with any other
+code.  The sidecar does not match *.bat, so the loop never runs it.
+
+Signed-off-by: Andrija Panic <andrija.panic@gmail.com>
+
+Backport to virt-v2v 2.7.1 (rhel-9.8) of libguestfs-common commit
+a5afb049d009dab1de2d9ffdd6fe034b30fd48b0, pull request
+https://github.com/libguestfs/libguestfs-common/pull/54, in the common
+submodule of virt-v2v 2.13.8.  Rewritten by hand for the firstboot.bat
+of Red Hat's common submodule (742c5f8b, branch rhel-9.8-virt-v2v),
+which predates upstream's later rework of this wrapper: Red Hat's
+"if !elvl! NEQ 249" structure and messages stay.  The retry message
+gains the attempt count, and the give-up message names the script and
+the number of attempts.
+
+The change is in common/, which the release tarball bundles; in git it
+is a local commit on top of 742c5f8b in the common submodule.
+---
+ common | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Submodule common 742c5f8b..45e95f00:
+diff --git a/common/mlcustomize/firstboot.ml b/common/mlcustomize/firstboot.ml
+index 5f2642b0..27494b0a 100644
+--- a/common/mlcustomize/firstboot.ml
++++ b/common/mlcustomize/firstboot.ml
+@@ -313,9 +313,26 @@ for %%%%f in (\"%%scripts%%\"\\*.bat) do (
+ 
+   if !elvl! NEQ 249 (
+     echo Script succeeded, moving to scripts-done
++    if exist \"%%%%f.tries\" del \"%%%%f.tries\"
+     move \"%%%%f\" \"%%scripts_done%%\"
+   ) else (
+-    echo Script failed, will retry on next boot
++    rem Exit code 249 asks for a retry on the next boot.  Bound the
++    rem retries: a script that fails the same way every time would
++    rem otherwise reboot the guest forever and block every later
++    rem script.  The attempt count lives next to the script.
++    set /a tries=1
++    if exist \"%%%%f.tries\" (
++      set /p tries=<\"%%%%f.tries\"
++      set /a tries+=1
++    )
++    if !tries! GEQ 3 (
++      echo Script %%%%~nxf exited 249 on attempt !tries! of 3, giving up and moving it to scripts-done
++      del \"%%%%f.tries\"
++      move \"%%%%f\" \"%%scripts_done%%\"
++    ) else (
++      echo Script failed, will retry on next boot ^(attempt !tries! of 3^)
++      (echo !tries!)>\"%%%%f.tries\"
++    )
+   )
+ 
+   :: Reboot the computer.  This is necessary to free any locked
+-- 
+2.43.0
+
