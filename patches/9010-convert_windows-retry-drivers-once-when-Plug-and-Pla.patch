@@ -1,0 +1,95 @@
+From 40c77ddc0e0f651d328a5d87e86794488d5c48a6 Mon Sep 17 00:00:00 2001
+From: Andrija Panic <andrija.panic@gmail.com>
+Date: Tue, 24 Nov 2026 20:54:39 +0100
+Subject: [PATCH] convert_windows: retry drivers once when Plug and Play was
+ busy
+
+On Windows Server 2025 guests, some virtio driver packages can fail in
+the first boot with 0xE0000223 (-536870365), "The Plug and Play service
+is not available", while Windows itself is still installing the virtio
+devices it found (seen with 7 and 11 of 14 packages on virtio-blk boot
+disks).  The same packages install without error on the same image when
+Plug and Play is idle, so the failure is a matter of timing, not of the
+packages.  Since the pnputil script reports a failed driver and goes
+on, such drivers were simply missing afterwards.
+
+When one or more drivers fail with exactly that exit code, write their
+names to a file next to the script, log them, and exit 249 so the
+script runs again after the next reboot.  On that second attempt only
+the listed drivers are installed again; whatever still fails is
+reported as before, the list is removed and the script exits 0.  So
+there is at most one extra attempt for this reason, and together with
+the pending-reboot retries it stays within the firstboot wrapper's
+limit of 3 attempts per script.  Drivers that fail with any other exit
+code are not retried and are reported as before.
+
+Signed-off-by: Andrija Panic <andrija.panic@gmail.com>
+
+Downstream change for virt-v2v 2.7.1 (rhel-9.8), not from upstream.
+---
+ convert/convert_windows.ml | 40 ++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 38 insertions(+), 2 deletions(-)
+
+diff --git a/convert/convert_windows.ml b/convert/convert_windows.ml
+index 35693e49..6e75e486 100644
+--- a/convert/convert_windows.ml
++++ b/convert/convert_windows.ml
+@@ -434,17 +434,53 @@ let convert (g : G.guestfs) source inspect i_firmware
+                      echo No pending reboot detected.\n\
+                      )\n\
+                      \n\
++                     rem A driver that fails with 0xE0000223 (-536870365, \"The Plug and Play\n\
++                     rem service is not available\") failed only because Plug and Play was busy,\n\
++                     rem for example with devices that Windows itself was still installing in\n\
++                     rem the first boot.  Such drivers are tried once more after the next\n\
++                     rem reboot; their names are kept in a file next to this script.\n\
++                     set PNP_BUSY=-536870365\n\
++                     set RETRY_LIST=%~dp0pnputil-pnp-busy.txt\n\
+                      set FAILED=\n\
++                     set BUSY=\n\
++                     if exist \"%RETRY_LIST%\" (\n\
++                     echo Second attempt for the drivers that failed because the Plug and Play service was busy.\n\
++                     for /f \"usebackq delims=\" %%n in (\"%RETRY_LIST%\") do (\n\
++                     echo Installing again: %%n.\n\
++                     %systemroot%\\Sysnative\\PnPutil -i -a \"%inf_dir%%%n\"\n\
++                     set RC=!errorlevel!\n\
++                     if !RC! neq 0 if !RC! neq 259 (\n\
++                     echo Failed to install %%n ^(pnputil exit code !RC!^).\n\
++                     set FAILED=!FAILED! %%n\n\
++                     ) else (\n\
++                     echo Successfully installed %%n.\n\
++                     )\n\
++                     )\n\
++                     del \"%RETRY_LIST%\"\n\
++                     ) else (\n\
+                      for %%f in (\"%inf_dir%*.inf\") do (\n\
+                      echo Installing: %%~nxf.\n\
+                      %systemroot%\\Sysnative\\PnPutil -i -a \"%%f\"\n\
+-                     if !errorlevel! neq 0 if !errorlevel! neq 259 (\n\
+-                     echo Failed to install %%~nxf ^(pnputil exit code !errorlevel!^).\n\
++                     set RC=!errorlevel!\n\
++                     if !RC! neq 0 if !RC! neq 259 (\n\
++                     echo Failed to install %%~nxf ^(pnputil exit code !RC!^).\n\
++                     if \"!RC!\"==\"%PNP_BUSY%\" (\n\
++                     set BUSY=!BUSY! %%~nxf\n\
++                     echo %%~nxf>>\"%RETRY_LIST%\"\n\
++                     ) else (\n\
+                      set FAILED=!FAILED! %%~nxf\n\
++                     )\n\
+                      ) else (\n\
+                      echo Successfully installed %%~nxf.\n\
+                      )\n\
+                      )\n\
++                     )\n\
++                     if defined BUSY (\n\
++                     echo The Plug and Play service was busy for:!BUSY!\n\
++                     if defined FAILED echo The following drivers could not be installed:!FAILED!\n\
++                     echo The drivers for which Plug and Play was busy will be tried once more after the next reboot.\n\
++                     exit /b 249\n\
++                     )\n\
+                      if defined FAILED (\n\
+                      echo The following drivers could not be installed:!FAILED!\n\
+                      echo The guest has already booted from its virtio disk, so a driver that\n\
+-- 
+2.43.0
+

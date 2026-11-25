@@ -8,7 +8,7 @@
 Name:          virt-v2v
 Epoch:         1
 Version:       2.7.1
-Release:       19%{?dist}.v2k4
+Release:       19%{?dist}.v2k5
 Summary:       Convert a virtual machine to run on KVM
 
 License:       GPL-2.0-or-later AND LGPL-2.0-or-later
@@ -106,6 +106,11 @@ Patch9007:     9007-mlcustomize-firstboot-bound-the-retries-of-a-Windows.patch
 # V2K backport from upstream virt-v2v, applied by hand to the rhel-9.8
 # script text (see %%changelog).
 Patch9008:     9008-convert_windows-check-for-a-pending-reboot-in-the-64.patch
+# V2K downstream fix in the common submodule, not upstream; same rule as
+# QEMU commit 55dc0aecb86b (see %%changelog).
+Patch9009:     9009-mlcustomize-inject_virtio_win-remove-a-leftover-VSS-.patch
+# V2K downstream fix, not upstream (see %%changelog).
+Patch9010:     9010-convert_windows-retry-drivers-once-when-Plug-and-Pla.patch
 
 %if !0%{?rhel}
 # libguestfs hasn't been built on i686 for a while since there is no
@@ -409,6 +414,15 @@ make -C tests TESTS=test-fedora-luks-on-lvm-conversion.sh check
 
 
 %changelog
+* Tue Nov 24 2026 Andrija Panic <andrija.panic@gmail.com> - 1:2.7.1-19.v2k5
+- Windows: before installing qemu-ga, remove a leftover "QEMU Guest Agent
+  VSS Provider" service that has no COM+ application (it makes the MSI
+  fail with 0x80070431 every time), and log the installer's exit code
+  (downstream; same rule as QEMU commit 55dc0aecb86b, qemu-ga 110.2.4)
+- Windows: a virtio driver that fails because the Plug and Play service
+  was busy (0xE0000223) is tried once more after the next reboot
+  (downstream; other failures are reported as before)
+
 * Tue Nov 24 2026 Andrija Panic <andrija.panic@gmail.com> - 1:2.7.1-19.v2k4
 - Windows: the pnputil first-boot script checks for a pending reboot
   with the 64-bit reg.exe (through Sysnative), so the Windows Update and

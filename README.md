@@ -2,28 +2,33 @@
 
 ## In short
 
-These are the stock EL9 `virt-v2v` packages with fixes from upstream virt-v2v and libguestfs-common added. They are
-drop-in replacements for the stock package on AlmaLinux 9 and compatible systems. You get the fixes now, without
-waiting for a newer virt-v2v in EL9.
+These are the stock EL9 `virt-v2v` packages with fixes from upstream virt-v2v and libguestfs-common added, plus two
+small fixes of our own for Windows guests. They are drop-in replacements for the stock package on AlmaLinux 9 and
+compatible systems. You get the fixes now, without waiting for a newer virt-v2v in EL9.
 
 They are built and used by [V2K Migrate](https://v2kmigrate.com) for VMware-to-KVM migrations to CloudStack and
 Proxmox, and shared here for anyone who runs virt-v2v on EL9.
 
 | | |
 |---|---|
-| Current version | `virt-v2v-2.7.1-19.el9_7.v2k4` |
+| Current version | `virt-v2v-2.7.1-19.el9_7.v2k5` |
 | Based on | AlmaLinux `virt-v2v-2.7.1-19.el9_7` |
 | Download | [Releases](../../releases) (signed RPMs, source RPM, checksums, public key) |
 
 ## Why it matters
 
-The stock EL9 virt-v2v (2.7.1) has bugs that upstream has fixed since. Without these fixes:
+The stock EL9 virt-v2v (2.7.1) has bugs, most of them fixed upstream since. Without these fixes:
 
 - a migrated **Windows Server 2025** guest can reboot forever on its first boot, because one virtio driver that always
   fails to install blocks every later step (guest agent, network setup, VMware Tools removal);
 - on 64-bit Windows, the first boot does not notice that Windows is **still waiting for a restart after updates**, so
   drivers can be installed while Windows is still busy, and a driver that fails then is not retried (for example, no
   network without `netkvm`);
+- on Windows Server 2025 with a virtio boot disk, Windows restarts itself in the first boot to swap in the real disk
+  driver, and virtio drivers installed at that moment fail ("The Plug and Play service is not available") and stay
+  missing;
+- the **QEMU guest agent** install fails every time on a guest that still has a leftover "QEMU Guest Agent VSS
+  Provider" service from an earlier agent;
 - migrated **Debian 11, 12 and 13** guests with UEFI boot can fail to boot;
 - there is no way to switch off the **fstrim** step, which can take a long time on large disks or slow storage.
 
@@ -40,6 +45,15 @@ The stock EL9 virt-v2v (2.7.1) has bugs that upstream has fixed since. Without t
 | [libguestfs/libguestfs-common#54](https://github.com/libguestfs/libguestfs-common/pull/54) | Windows first boot: a step that keeps asking for a retry is tried at most 3 times, then skipped, so later steps still run. | Yes |
 | [libguestfs/virt-v2v#211](https://github.com/libguestfs/virt-v2v/pull/211) (issue [#210](https://github.com/libguestfs/virt-v2v/issues/210)) | Windows first boot: the check for a pending restart (Windows Update, component servicing) reads the 64-bit registry, so on 64-bit Windows the drivers are installed only after that restart. New in `.v2k4`. | Yes |
 
+## Our own fixes (not upstream)
+
+| Fix | What it fixes | Since |
+|---|---|---|
+| Leftover guest agent service | Before installing the QEMU guest agent, the first boot removes a "QEMU Guest Agent VSS Provider" service that has no COM+ application left (left behind by an earlier agent). Otherwise the agent installer fails with 0x80070431 every time and the guest has no agent. Same rule as QEMU commit [`55dc0aecb86b`](https://gitlab.com/qemu-project/qemu/-/commit/55dc0aecb86b7327c3b6c183001699e98ae9b553), which fixes this inside qemu-ga 110.2.4; virtio-win releases still ship 110.2.3. The installer's exit code is now logged too. | `.v2k5` |
+| Drivers that hit a busy Plug and Play service | A virtio driver that fails with 0xE0000223 ("The Plug and Play service is not available") is tried once more after the next reboot. This happens on Windows Server 2025 with a virtio boot disk, when Windows restarts itself in the first boot to swap in the real disk driver. Other driver failures are reported as before. At most one extra reboot. | `.v2k5` |
+
+Both were tested in real migrations to Proxmox VE and CloudStack (Windows Server 2016, 2019, 2022 and 2025).
+
 The fixes are rebased onto the EL9 `rhel-9.8` branch of virt-v2v. Some needed small rewrites to fit the older code;
 the behaviour matches upstream. Each patch's commit message names its upstream commit and pull request, and
 [patches/README.md](patches/README.md) maps each patch file to its upstream fix.
@@ -52,9 +66,9 @@ release you want from [Releases](../../releases), then:
 ```
 sudo rpm --import RPM-GPG-KEY-v2kmigrate
 sha256sum -c SHA256SUMS --ignore-missing
-rpm -K virt-v2v-2.7.1-19.el9_7.v2k4.x86_64.rpm      # "digests signatures OK"
-sudo dnf install ./virt-v2v-2.7.1-19.el9_7.v2k4.x86_64.rpm
-rpm -q virt-v2v                                     # virt-v2v-2.7.1-19.el9_7.v2k4.x86_64
+rpm -K virt-v2v-2.7.1-19.el9_7.v2k5.x86_64.rpm      # "digests signatures OK"
+sudo dnf install ./virt-v2v-2.7.1-19.el9_7.v2k5.x86_64.rpm
+rpm -q virt-v2v                                     # virt-v2v-2.7.1-19.el9_7.v2k5.x86_64
 virt-v2v --help | grep no-fstrim
 ```
 
@@ -75,12 +89,12 @@ To check the checksum file itself: `gpg --import RPM-GPG-KEY-v2kmigrate`, then `
 ## Source
 
 The source RPM is in every release. It is AlmaLinux's source package with the patches in this repository added
-(`virt-v2v.spec`, `patches/`). To rebuild: `dnf builddep virt-v2v-2.7.1-19.el9_7.v2k4.src.rpm`, then
-`rpmbuild --rebuild virt-v2v-2.7.1-19.el9_7.v2k4.src.rpm`.
+(`virt-v2v.spec`, `patches/`). To rebuild: `dnf builddep virt-v2v-2.7.1-19.el9_7.v2k5.src.rpm`, then
+`rpmbuild --rebuild virt-v2v-2.7.1-19.el9_7.v2k5.src.rpm`.
 
 ## Versions
 
-Every version is a git tag (the package version, for example `v2.7.1-19.el9_7.v2k4`) and a GitHub Release. Older
+Every version is a git tag (the package version, for example `v2.7.1-19.el9_7.v2k5`) and a GitHub Release. Older
 releases stay downloadable. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Not covered / known limits
@@ -90,11 +104,10 @@ releases stay downloadable. See [CHANGELOG.md](CHANGELOG.md).
 - Built and tested for x86_64 on AlmaLinux 9 only.
 - If a Windows restart stays pending through 3 boots (it never clears), the driver step gives up so that the first
   boot can finish, and the drivers are not installed. Tip: restart Windows VMs after patching, before migrating them.
-- The Windows guest agent comes from the `virtio-win` package, not from virt-v2v. With `virtio-win` 1.9.61 (qemu-ga
-  110.2.3), the agent install fails on a guest that still has a leftover "QEMU Guest Agent VSS Provider" service from
-  an earlier agent. Upstream fixed this in qemu-ga 110.2.4 (QEMU commit `55dc0aecb86b`). Workaround: if the source VM
-  has that service but no QEMU guest agent installed, delete the service before migrating
-  (`sc delete "QEMU Guest Agent VSS Provider"`).
+- The Windows guest agent comes from the `virtio-win` package, not from virt-v2v. qemu-ga 110.2.3 (in `virtio-win`
+  1.9.61) also has a VSS backup bug fixed in 110.2.4; that is outside virt-v2v.
+- VMware Tools removal can fail (exit 1603) on some Windows guests after the move off VMware; the first boot logs it
+  and carries on, as the stock package does.
 
 ## Reporting problems
 

@@ -1,0 +1,92 @@
+From 77e628499c8b45344d3b3f532f49d72999eef6ff Mon Sep 17 00:00:00 2001
+From: Andrija Panic <andrija.panic@gmail.com>
+Date: Tue, 24 Nov 2026 19:53:00 +0100
+Subject: [PATCH] mlcustomize/inject_virtio_win: remove a leftover VSS provider
+ service before installing qemu-ga
+
+If a Windows guest still has the "QEMU Guest Agent VSS Provider"
+service but no COM+ application of that name (left behind by an
+earlier agent), the qemu-ga MSI's RegisterCom custom action fails with
+0x80070431 (ERROR_SERVICE_EXISTS), the whole install is rolled back,
+and every later attempt fails the same way, because the rollback does
+not remove the service.  The converted guest then has no guest agent.
+
+QEMU fixed this inside the VSS provider in commit 55dc0aecb86b
+("qga/vss-win32: remove orphaned VSS provider service"), released in
+qemu-ga 110.2.4.  virtio-win releases still ship 110.2.3, so do the
+same in the install script, once, before the installer runs: if the
+service exists and no COM+ application of that name does, stop it if
+it is running and delete it.  In every other case nothing is changed.
+If the check cannot run, log that and install as before.
+
+Also log the installer's exit code and its log file, which the script
+ignored until now, so a failed install shows in the firstboot log.
+
+Signed-off-by: Andrija Panic <andrija.panic@gmail.com>
+
+Downstream change for virt-v2v 2.7.1 (rhel-9.8), not from upstream
+virt-v2v or libguestfs-common.  The rule copies QEMU commit
+55dc0aecb86b.  The change is in common/, which the release tarball
+bundles; in git it is a local commit on top of 45e95f00 in the common
+submodule.
+---
+ common | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+Submodule common 45e95f00..1d587030:
+diff --git a/common/mlcustomize/inject_virtio_win.ml b/common/mlcustomize/inject_virtio_win.ml
+index 07a91fc7..059e2f04 100644
+--- a/common/mlcustomize/inject_virtio_win.ml
++++ b/common/mlcustomize/inject_virtio_win.ml
+@@ -617,14 +617,46 @@ and configure_qemu_ga t tempdir_win files =
+   add "";
+   add "Write-Host Installing QEMU Guest Agent";
+   add "";
++  add "# Remove a leftover \"QEMU Guest Agent VSS Provider\" service whose COM+";
++  add "# application is gone (left by an earlier agent).  The installer's";
++  add "# RegisterCom step then fails with 0x80070431 (the service already";
++  add "# exists) and rolls back the whole install, every time.  Same rule as";
++  add "# QEMU commit 55dc0aecb86b, which fixes this inside qemu-ga 110.2.4:";
++  add "# only a service without its COM+ application is removed.";
++  add "$vssName = 'QEMU Guest Agent VSS Provider'";
++  add "try {";
++  add "  $vssSvc = Get-Service -Name $vssName -ErrorAction SilentlyContinue";
++  add "  if (-not $vssSvc) {";
++  add "    Write-Host 'No leftover VSS provider service found'";
++  add "  } else {";
++  add "    $vssApp = $null";
++  add "    $catalog = New-Object -ComObject COMAdmin.COMAdminCatalog";
++  add "    $apps = $catalog.GetCollection('Applications')";
++  add "    $apps.Populate()";
++  add "    foreach ($a in $apps) { if ($a.Name -eq $vssName) { $vssApp = $a } }";
++  add "    if ($vssApp) {";
++  add "      Write-Host 'VSS provider service and its COM+ application are both present: nothing removed'";
++  add "    } else {";
++  add "      Write-Host 'Leftover VSS provider service found without its COM+ application: removing it'";
++  add "      if ($vssSvc.Status -ne 'Stopped') { Stop-Service -Name $vssName -Force -ErrorAction SilentlyContinue }";
++  add "      & sc.exe delete $vssName";
++  add "      Write-Host \"sc delete exit code: $LASTEXITCODE\"";
++  add "    }";
++  add "  }";
++  add "} catch {";
++  add "  Write-Host \"Leftover VSS provider check failed, installing anyway: $_\"";
++  add "}";
++  add "";
+   add "# Run qemu-ga installers";
+   List.iter (
+     fun msi ->
+       add (sprintf "Write-Host \"Writing log to %s\\%s.log\""
+              tempdir_win msi);
+       (* [`] is an escape char for quotes *)
+-      add (sprintf "Start-Process -Wait -FilePath \"%s\\%s\" -ArgumentList \"/norestart\",\"/qn\",\"/l+*vx\",\"`\"%s\\%s.log`\"\""
+-             tempdir_win msi tempdir_win msi)
++      add (sprintf "$p = Start-Process -Wait -PassThru -FilePath \"%s\\%s\" -ArgumentList \"/norestart\",\"/qn\",\"/l+*vx\",\"`\"%s\\%s.log`\"\""
++             tempdir_win msi tempdir_win msi);
++      add (sprintf "Write-Host \"%s installer exit code: $($p.ExitCode) (log: %s\\%s.log)\""
++             msi tempdir_win msi)
+   ) files;
+ 
+   Firstboot.add_firstboot_powershell t.g t.root "install-qemu-ga" !script
+-- 
+2.43.0
+

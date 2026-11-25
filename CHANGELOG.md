@@ -2,6 +2,16 @@
 
 Newest first. Each version is a git tag and a GitHub Release with signed packages.
 
+## v2.7.1-19.el9_7.v2k5 (2026-11-25)
+
+v2k4 plus two fixes of our own (downstream, not upstream):
+
+- Windows first boot: before the QEMU guest agent install, remove a leftover "QEMU Guest Agent VSS Provider" service
+  that has no COM+ application (it makes the installer fail with 0x80070431 every time); log the installer's exit
+  code. Same rule as QEMU commit 55dc0aecb86b (qemu-ga 110.2.4).
+- Windows first boot: virtio drivers that fail because the Plug and Play service was busy (0xE0000223) are tried
+  once more after the next reboot.
+
 ## v2.7.1-19.el9_7.v2k4 (2026-11-24)
 
 v2k3 plus one upstream fix:
